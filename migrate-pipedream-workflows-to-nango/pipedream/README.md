@@ -1,25 +1,29 @@
-# Pipedream source baseline
+# Pipedream source workflow
 
-These are the source files for the purpose-built tutorial workflow tested on November 1, 2026. They are **not an official export or an importable workflow JSON**. The test workspace's free plan did not include File Store, required by Pipedream's [official export process](https://pipedream.com/docs/workflows/export-workflows). The article explicitly documents this limitation.
+This workflow receives a GitHub issue event, updates a support record, sends a Slack notification, and stores the receipt. Recreate it with the source files below to compare its behavior with the Nango implementation.
+
+These files are individual workflow steps, not an importable Pipedream export.
 
 ## Build the workflow
 
-1. Create an HTTP-triggered workflow. Select **Raw request** event data and **Return a custom response from your workflow**. Raw bytes are required for GitHub HMAC verification.
-2. Add a Node.js step named `verify_issue`, using `verify-issue.mjs`. Refresh fields and configure the allowed numeric repository ID and a dedicated signing secret. The sample customer ID is `demo_customer_support`; replace it consistently for your test.
-3. Add `update_support_record` from its matching file. Select a new **Migration demo support records** Data Store and set the approved Slack channel ID. The published source makes this a field; the live run used the same ID directly in code.
-4. Create a dedicated Slack app using `slack-app-manifest.json`, install it in your test workspace, and add it only to the test channel. Its sole bot scope is `chat:write`. Save its Bot User OAuth Token through Pipedream's **Bot for Slack** connector.
-5. Add `send_message` from `send-message.mjs`; refresh fields and select that connection. The step sends one `chat.postMessage` request and returns only `ok`, `channel`, and `ts`.
-6. Add `record_receipt` from its matching file, selecting the same Data Store. It verifies and records the Slack receipt before returning HTTP 200.
-7. Test the steps with a uniquely identified, signed setup payload, then deploy. In the GitHub test repository's Webhooks settings, add the Pipedream HTTP URL, select JSON, enter the same signing secret, keep SSL verification enabled, and subscribe only to **Issues**. This is a repository webhook, not a GitHub OAuth connection.
-8. Close/reopen a real test issue and inspect the execution, support record, and Slack receipt. Pause Nango forwarding during baseline writes. Do not run both notification paths for the same customer.
+1. Create an HTTP-triggered workflow. Select **Raw request** event data and **Return a custom response from your workflow** so the first step can verify the GitHub signature against the raw bytes.
+2. Add a Node.js step named `verify_issue` using [`verify-issue.mjs`](verify-issue.mjs). Refresh fields and set the allowed numeric repository ID and a dedicated signing secret. Replace the sample customer ID `demo_customer_support` consistently for your test.
+3. Add `update_support_record` using [`update-support-record.mjs`](update-support-record.mjs). Select a new Data Store and set the destination Slack channel ID.
+4. Create a Slack app using [`slack-app-manifest.json`](slack-app-manifest.json), install it in your workspace, and invite it to the test channel. Its bot scope is `chat:write`. Save the Bot User OAuth Token through Pipedream's **Bot for Slack** connector.
+5. Add `send_message` using [`send-message.mjs`](send-message.mjs). Refresh fields and select that connection.
+6. Add `record_receipt` using [`record-receipt.mjs`](record-receipt.mjs) and select the same Data Store. It records the Slack receipt before returning HTTP 200.
+7. Test with a uniquely identified, signed payload, then deploy. In the GitHub repository's Webhooks settings, add the workflow's HTTP URL, choose JSON, enter the same signing secret, and subscribe to **Issues**. Keep SSL verification enabled.
+8. Pause Nango forwarding for this customer, then close and reopen a test issue. Check the workflow execution, support record, and Slack message.
 
-## What the baseline stores
+Keep automated workflow retries disabled. A timeout can occur after Slack has accepted a message; check Slack history before replaying a failed step or resetting a pending delivery.
 
-- `issue:<customer>:<repository>:<issue>`: the latest issue snapshot.
-- `delivery:<GitHub delivery GUID>`: pending processing, then a confirmed Slack receipt.
+## Stored state
 
-This is a sequential demonstration. Pipedream [Data Stores are not atomic or transactional](https://pipedream.com/docs/workflows/data-management/data-stores). A delivery record alone is not a production outbox or concurrency guarantee. Pending deliveries need manual reconciliation after failure. Testing a step independently can repeat its external side effects, bypassing earlier deduplication steps.
+| Key | Value |
+| --- | --- |
+| `issue:<customer>:<repository>:<issue>` | Latest issue snapshot |
+| `delivery:<GitHub delivery GUID>` | Processing status, followed by the confirmed Slack receipt |
 
-The prebuilt Bot for Slack Send Message v0.0.5 required conversation-read scopes. During setup it reported a scope error after a message had already arrived. Re-testing with the custom step produced a second labeled setup message. Those two messages are documented in VALIDATION.md and excluded from real-event counts. Never interpret a failed step as proof that its external write did not happen.
+This baseline is for sequential testing. Pipedream [Data Stores are not transactional](https://pipedream.com/docs/workflows/data-management/data-stores), so the delivery record alone does not prevent concurrent duplicate writes. Testing a send step independently also bypasses earlier deduplication.
 
-Keep automated workflow retries disabled for this demo. A timeout or failed receipt step may follow a successful message write. Check Slack history before replaying or resetting a pending delivery. No Slack token is migrated to Nango; accounts are connected separately.
+Use the [checkpoint and cutover instructions](../README.md#import-confirmed-source-state-and-cut-over) to carry confirmed state into the Nango implementation. Connect accounts separately in Nango and keep only one notification writer active during the switch.
